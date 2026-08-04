@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>星野爱 · 拟人化AI伴聊</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260802b" />
+</head>
+<body>
+  <!-- 登录/注册遮罩 -->
+  <div class="auth-overlay" id="authOverlay" style="display:none;">
+    <div class="auth-box">
+      <div class="auth-avatar">💕</div>
+      <h2 class="auth-title">星野爱</h2>
+      <p class="auth-subtitle" id="authSubtitle">登录后开始聊天~♪</p>
+      <form id="authForm">
+        <input type="text" id="authUsername" placeholder="用户名" autocomplete="username" required />
+        <input type="password" id="authPassword" placeholder="密码" autocomplete="current-password" required />
+        <button type="submit" id="authSubmitBtn">登录</button>
+      </form>
+      <div class="auth-switch">
+        <span id="authSwitchText">没有账号？</span>
+        <a href="#" id="authSwitchLink">注册</a>
+      </div>
+      <div class="auth-error" id="authError"></div>
+      <div class="auth-hint">未登录也可作为访客继续聊天（数据共享）</div>
+      <button class="auth-guest-btn" id="authGuestBtn">以访客身份继续</button>
+    </div>
+  </div>
+
+  <div class="app">
+    <!-- 左侧聊天区 -->
+    <div class="chat-area">
+      <div class="topbar">
+        <div class="avatar">💕</div>
+        <div class="title-area">
+          <div class="name">星野爱</div>
+          <div class="status">在线 · 新B小町</div>
+        </div>
+        <div class="actions">
+          <label class="switch" title="开发者模式（显示思考链）">
+            <input type="checkbox" id="devSwitch" />
+            <span class="slider"></span>
+          </label>
+          <span class="user-badge" id="userBadge" style="display:none;"></span>
+          <button class="btn btn-ghost" id="resetBtn">重置</button>
+          <button class="btn btn-danger" id="forgetBtn" title="清空长期记忆（情景记忆+用户画像），不可恢复">忘记我</button>
+          <button class="btn btn-ghost" id="logoutBtn" style="display:none;" title="登出">登出</button>
+        </div>
+      </div>
+
+      <div class="messages" id="messages">
+        <div class="msg ai">
+          <div class="avatar">💕</div>
+          <div class="bubble">
+            我是新B小町的星野爱！✨<br>
+            今天也一起开心地聊天吧~♪<br>
+            有什么想跟爱说的吗？
+          </div>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <div class="input-wrap">
+          <textarea id="input" placeholder="跟爱说点什么..." rows="1"></textarea>
+          <button id="sendBtn">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧面板 -->
+    <div class="sidebar">
+      <div class="sidebar-tabs">
+        <div class="sidebar-tab active" data-panel="emotionPanel">情绪</div>
+        <div class="sidebar-tab" data-panel="profilePanel">画像</div>
+        <div class="sidebar-tab" data-panel="memoryPanel">记忆</div>
+        <div class="sidebar-tab" data-panel="statsPanel">统计</div>
+      </div>
+
+      <div class="sidebar-content">
+        <!-- 情绪面板 -->
+        <div class="tab-panel active" id="emotionPanel">
+          <div class="favorability-box">
+            <div class="fav-value" id="favValue">10</div>
+            <div class="fav-label" id="favLabel">友好</div>
+            <div class="favorability-bar">
+              <div class="fill" id="favBar" style="width:55%"></div>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h4>情绪状态</h4>
+            <div class="emotion-grid">
+              <div class="emotion-item">
+                <div class="label">愉悦度 P</div>
+                <div class="value" id="pleasureVal">0.30</div>
+                <div class="bar"><div class="fill" id="pleasureBar" style="width:65%"></div></div>
+              </div>
+              <div class="emotion-item">
+                <div class="label">唤醒度 A</div>
+                <div class="value" id="arousalVal">0.50</div>
+                <div class="bar"><div class="fill" id="arousalBar" style="width:75%"></div></div>
+              </div>
+              <div class="emotion-item">
+                <div class="label">支配度 D</div>
+                <div class="value" id="dominanceVal">0.20</div>
+                <div class="bar"><div class="fill" id="dominanceBar" style="width:60%"></div></div>
+              </div>
+              <div class="emotion-item">
+                <div class="label">情绪标签</div>
+                <div class="value" id="emotionLabel" style="font-size:14px;">平淡</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h4>工具调用</h4>
+            <div id="toolList">
+              <div class="empty">暂无工具调用</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 记忆面板 -->
+        <div class="tab-panel" id="memoryPanel" style="display:none;">
+          <div class="panel-section">
+            <h4>记忆操作日志</h4>
+            <div id="memoryList">
+              <div class="empty">暂无记忆操作</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 用户画像面板 -->
+        <div class="tab-panel" id="profilePanel" style="display:none;">
+          <div class="panel-section">
+            <h4>用户画像 <span class="hint" id="profileCount"></span></h4>
+            <div id="profileList">
+              <div class="empty">暂无用户画像，多聊几句让爱了解你~</div>
+            </div>
+          </div>
+          <div class="panel-section">
+            <h4>最近记忆 <span class="hint" id="episodicHint"></span></h4>
+            <div id="episodicList">
+              <div class="empty">暂无对话记忆</div>
+            </div>
+            <button id="loadMoreEpisodic" class="btn btn-ghost" style="display:none; width:100%; margin-top:8px;">加载更多</button>
+          </div>
+        </div>
+
+        <!-- 统计面板 -->
+        <div class="tab-panel" id="statsPanel" style="display:none;">
+          <div class="panel-section">
+            <h4>记忆系统统计</h4>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="num" id="statWorking">0</div>
+                <div class="lbl">工作记忆</div>
+              </div>
+              <div class="stat-card">
+                <div class="num" id="statEpisodic">0</div>
+                <div class="lbl">情景记忆</div>
+              </div>
+              <div class="stat-card">
+                <div class="num" id="statSemantic">0</div>
+                <div class="lbl">语义记忆</div>
+              </div>
+              <div class="stat-card">
+                <div class="num">★</div>
+                <div class="lbl">已激活</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h4>技术架构</h4>
+            <div class="memory-item">
+              <div class="mem-type">Agent</div>
+              <div>ReAct Loop + Function Calling</div>
+            </div>
+            <div class="memory-item">
+              <div class="mem-type">记忆</div>
+              <div>三层记忆 + 巩固机制</div>
+            </div>
+            <div class="memory-item">
+              <div class="mem-type">RAG</div>
+              <div>知识+记忆混合检索</div>
+            </div>
+            <div class="memory-item">
+              <div class="mem-type">情绪</div>
+              <div>PAD三维状态机</div>
+            </div>
+            <div class="memory-item">
+              <div class="mem-type">反思</div>
+              <div>回复后自检+更新</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js?v=20260802b"></script>
+  <script src="/static/js/chat.js?v=20260802b"></script>
+</body>
+</html>
