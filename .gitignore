@@ -1,0 +1,27 @@
+# 敏感数据（密码哈希、Cookie 签名密钥、用户数据）
+data/users.json
+data/.auth_secret
+
+# 运行时数据（向量库、SQLite、索引缓存，本地可重建）
+# 注：data/knowledge/*.md 是角色知识库（项目内容），需上传
+data/vector_db/
+data/memory.db
+data/chroma.sqlite3
+data/knowledge/.index_manifest.json
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# 日志
+*.log

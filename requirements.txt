@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+chromadb>=0.4.22
+openai>=1.12
+pydantic>=2.6
+sse-starlette>=1.6
+pytest>=7.0
+sentence-transformers>=2.3  # BGE-small-zh 本地 embedding 模型
+python-telegram-bot>=20.7    # Telegram Bot 通道（async）
+itsdangerous>=2.1            # 签名 Cookie（登录态）
