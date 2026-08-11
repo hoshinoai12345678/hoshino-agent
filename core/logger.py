@@ -22,6 +22,10 @@ def _configure_logging():
         datefmt="%H:%M:%S",
         stream=sys.stderr,
     )
+    # 降低第三方库日志噪音（httpx 的 HEAD 检查、sentence_transformers 的加载细节）
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
     _LOG_CONFIGURED = True
 
 

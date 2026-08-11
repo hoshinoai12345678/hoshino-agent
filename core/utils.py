@@ -7,6 +7,7 @@
 import hashlib
 import json
 import math
+import os
 import re
 from typing import Optional
 
@@ -33,8 +34,14 @@ def _get_model():
         return _MODEL
     try:
         from sentence_transformers import SentenceTransformer
-        _MODEL = SentenceTransformer("BAAI/bge-small-zh-v1.5")
-        logger.info("BGE-small-zh 模型加载成功")
+        # 优先使用本地路径 + local_files_only=True，跳过联网检查（省 9 秒）
+        local_path = r"E:\ai-agent\hf_cache\hub\models--BAAI--bge-small-zh-v1.5\snapshots\7999e1d3359715c523056ef9478215996d62a620"
+        if os.path.isdir(local_path) and os.path.exists(os.path.join(local_path, "model.safetensors")):
+            _MODEL = SentenceTransformer(local_path, local_files_only=True)
+            logger.info(f"使用本地 BGE-small-zh 模型: {local_path}")
+        else:
+            _MODEL = SentenceTransformer("BAAI/bge-small-zh-v1.5")
+            logger.info("BGE-small-zh 模型加载成功（在线）")
     except Exception as e:
         _MODEL_LOAD_ERROR = str(e)
         logger.error(f"BGE 模型加载失败，降级为哈希嵌入。原因: {e}")
@@ -128,6 +135,60 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+# ---- BGE Reranker 懒加载（cross-encoder 精排，全局单例）----
+_RERANKER = None
+_RERANKER_LOAD_ERROR: Optional[str] = None
+
+
+def _get_reranker():
+    """懒加载 BGE-reranker-base（cross-encoder 模型）
+
+    cross-encoder vs bi-encoder：
+    - bi-encoder（BGE-small-zh）：query 和 doc 分别编码，算余弦相似度。快但粗。
+    - cross-encoder（BGE-reranker）：query 和 doc 拼一起送入模型，直接输出相关性分数。慢但精。
+
+    检索流程：bi-encoder 召回 top_k → cross-encoder 精排（本项目用法）。
+    """
+    global _RERANKER, _RERANKER_LOAD_ERROR
+    if _RERANKER is not None or _RERANKER_LOAD_ERROR is not None:
+        return _RERANKER
+    try:
+        from sentence_transformers import CrossEncoder
+        # 优先使用本地路径，避免在线下载
+        local_path = r"E:\ai-agent\hf_cache\hub\models--BAAI--bge-reranker-base\snapshots\2cfc18c9415c912f9d8155881c133215df768a70"
+        if os.path.isdir(local_path) and os.path.exists(os.path.join(local_path, "model.safetensors")):
+            model_source = local_path
+            logger.info(f"使用本地 BGE-reranker-base 模型: {local_path}")
+            _RERANKER = CrossEncoder(model_source, model_kwargs={"local_files_only": True})
+        else:
+            model_source = "BAAI/bge-reranker-base"
+            logger.info("本地未找到 BGE-reranker-base，尝试在线下载")
+            _RERANKER = CrossEncoder(model_source)
+        logger.info("BGE-reranker-base 模型加载成功（cross-encoder 精排）")
+    except Exception as e:
+        _RERANKER_LOAD_ERROR = str(e)
+        logger.warning(f"BGE-reranker 加载失败，降级为余弦相似度重排。原因: {e}")
+    return _RERANKER
+
+
+def rerank_cross_encoder(query: str, documents: list[str]) -> list[float]:
+    """用 cross-encoder 对 query-documents 对打分
+
+    Args:
+        query: 查询文本
+        documents: 文档文本列表
+    Returns:
+        相关性分数列表（分数越高越相关，cross-encoder 分数可为负数）
+    """
+    reranker = _get_reranker()
+    if reranker is None or not documents:
+        return [0.0] * len(documents)
+    pairs = [[query, doc] for doc in documents]
+    scores = reranker.predict(pairs)
+    # predict 返回 numpy 数组，统一转成 list[float]
+    return [float(s) for s in scores]
+
+
 def extract_json(content: str) -> dict | None:
     """从 LLM 输出中提取 JSON（多重兜底）
 
@@ -164,3 +225,59 @@ def extract_json(content: str) -> dict | None:
             pass
 
     return None
+
+
+# ---- Token 计数（tiktoken）----
+# tiktoken 对 OpenAI 模型精确，对 DeepSeek 等兼容模型近似估算（cl100k_base 编码）
+_ENCODER = None
+
+
+def _get_encoder():
+    """懒加载 tiktoken 编码器"""
+    global _ENCODER
+    if _ENCODER is not None:
+        return _ENCODER
+    try:
+        import tiktoken
+        _ENCODER = tiktoken.get_encoding("cl100k_base")
+        logger.info("tiktoken 编码器加载成功（cl100k_base）")
+    except Exception as e:
+        logger.warning(f"tiktoken 加载失败，token 计数将退化为字符数估算。原因: {e}")
+    return _ENCODER
+
+
+def count_tokens(text: str) -> int:
+    """计算文本的 token 数
+
+    优先用 tiktoken 精确计算（cl100k_base 编码），
+    不可用时退化为字符数 / 2 粗略估算（中文约 1 字 ≈ 1-2 token）。
+
+    Args:
+        text: 输入文本
+    Returns:
+        token 数
+    """
+    if not text:
+        return 0
+    enc = _get_encoder()
+    if enc is not None:
+        return len(enc.encode(text))
+    # 降级：字符数 / 2 粗略估算
+    return len(text) // 2
+
+
+def count_messages_tokens(messages: list[dict]) -> int:
+    """计算 messages 数组的总 token 数
+
+    Args:
+        messages: [{"role": "system", "content": "..."}, ...]
+    Returns:
+        总 token 数（含 role 标记开销，每条约 +4 token）
+    """
+    total = 0
+    for msg in messages:
+        # 每条 message 约 4 token 的结构开销（role + delimiters）
+        total += 4
+        total += count_tokens(msg.get("content", ""))
+    total += 2  # primer overhead
+    return total

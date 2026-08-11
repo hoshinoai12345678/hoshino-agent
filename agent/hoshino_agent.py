@@ -9,6 +9,7 @@
 4. 生成阶段：流式输出最终回复
 5. 反思阶段：自检并更新记忆/情绪
 """
+import asyncio
 import json
 from typing import AsyncGenerator, Optional
 
@@ -107,7 +108,8 @@ class HoshinoAgent:
         self.working.add_user(user_message)
 
         # 2. 检索阶段：RAG 检索
-        retrieval_ctx = self.retriever.to_prompt_context(user_message)
+        # cross-encoder 精排是 CPU 密集同步操作，放到线程池避免阻塞事件循环
+        retrieval_ctx = await asyncio.to_thread(self.retriever.to_prompt_context, user_message)
         emotion_ctx = self.emotion.to_prompt_context()
         semantic_ctx = self.semantic.to_prompt_context()
         working_ctx = self.working.to_prompt_context()

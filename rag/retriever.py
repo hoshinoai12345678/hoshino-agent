@@ -1,19 +1,28 @@
 """混合检索器
 
 整合角色知识库、情景记忆、语义记忆，提供统一的检索接口。
+
+检索流程（两阶段检索）：
+1. 召回阶段：bi-encoder（BGE-small-zh）向量检索 top_k + 去重
+2. 精排阶段：cross-encoder（BGE-reranker）对 query-doc 对精确打分重排序
+   - cross-encoder 不可用时降级为 bi-encoder 余弦相似度重排
+3. 阈值过滤：丢弃弱相关结果
 """
 from typing import Optional
 
-from config import KNOWLEDGE_TOP_K, EPISODIC_TOP_K
+from config import (KNOWLEDGE_TOP_K, EPISODIC_TOP_K,
+                    ENABLE_CROSS_ENCODER_RERANK, CROSS_ENCODER_THRESHOLD)
 from core.memory.episodic import EpisodicMemory
 from core.memory.semantic import SemanticMemory
-from core.utils import embed, embed_query, cosine_similarity
+from core.utils import embed, embed_query, cosine_similarity, rerank_cross_encoder
 from rag.indexer import KnowledgeIndexer
+from core.logger import get_logger
 
-# 相似度阈值：rerank 后低于此值的检索结果视为不相关，过滤掉以提升 precision
+logger = get_logger(__name__)
+
+# bi-encoder 余弦相似度阈值（降级模式用）
 # BGE-small-zh 归一化向量的 cosine 相似度经验值：0.5+ 强相关，0.35~0.5 弱相关，<0.35 噪声
-KNOWLEDGE_SIM_THRESHOLD = 0.35
-EPISODIC_SIM_THRESHOLD = 0.35
+BI_ENCODER_SIM_THRESHOLD = 0.35
 
 
 class HybridRetriever:
@@ -30,6 +39,8 @@ class HybridRetriever:
     def retrieve(self, query: str) -> dict:
         """混合检索（去重 + rerank + 阈值过滤）
 
+        两阶段检索：bi-encoder 召回 → cross-encoder 精排 → 阈值过滤
+
         Returns:
             {
                 "knowledge": [...],   # 角色知识（rerank + 阈值过滤后）
@@ -37,28 +48,33 @@ class HybridRetriever:
                 "semantic": [...],    # 语义记忆
             }
         """
-        # 1. 检索角色知识
+        # 1. 召回阶段：bi-encoder（BGE-small-zh）向量检索 top_k
         knowledge = self.knowledge_indexer.search(query, top_k=KNOWLEDGE_TOP_K)
-
-        # 2. 检索情景记忆 + 去重
         episodic = self._dedup(self.episodic.search(query, top_k=EPISODIC_TOP_K))
-
-        # 3. 检索语义记忆（用户画像）
         semantic = self.semantic.search(query)
 
-        # 4. Rerank：用精确 cosine 相似度重排序（ChromaDB HNSW 是近似检索）
+        # 2. 精排阶段：cross-encoder（BGE-reranker）对 query-doc 对打分重排序
         knowledge = self._rerank(query, knowledge)
         episodic = self._rerank(query, episodic)
 
-        # 5. 阈值过滤：rerank 后丢弃弱相关结果，提升 precision
-        knowledge = [k for k in knowledge if k.get("rerank_score", 0) >= KNOWLEDGE_SIM_THRESHOLD]
-        episodic = [m for m in episodic if m.get("rerank_score", 0) >= EPISODIC_SIM_THRESHOLD]
+        # 3. 阈值过滤：rerank 后丢弃弱相关结果
+        threshold = CROSS_ENCODER_THRESHOLD if self._use_cross_encoder() else BI_ENCODER_SIM_THRESHOLD
+        knowledge = [k for k in knowledge if k.get("rerank_score", 0) >= threshold]
+        episodic = [m for m in episodic if m.get("rerank_score", 0) >= threshold]
 
         return {
             "knowledge": knowledge,
             "episodic": episodic,
             "semantic": semantic,
         }
+
+    @staticmethod
+    def _use_cross_encoder() -> bool:
+        """是否启用 cross-encoder 精排（配置开关 + 模型可用）"""
+        if not ENABLE_CROSS_ENCODER_RERANK:
+            return False
+        from core.utils import _get_reranker
+        return _get_reranker() is not None
 
     @staticmethod
     def _dedup(items: list[dict], threshold: float = 0.95) -> list[dict]:
@@ -79,13 +95,29 @@ class HybridRetriever:
 
     @staticmethod
     def _rerank(query: str, items: list[dict]) -> list[dict]:
-        """用 query-document 精确 cosine 相似度重排序"""
+        """精排重排序
+
+        优先用 cross-encoder（BGE-reranker）对 query-doc 对精确打分，
+        模型不可用时降级为 bi-encoder 余弦相似度重排。
+        """
         if not items:
             return items
-        query_vec = embed_query(query)
-        for item in items:
-            doc_vec = embed(item.get("content", ""))
-            item["rerank_score"] = cosine_similarity(query_vec, doc_vec)
+
+        if HybridRetriever._use_cross_encoder():
+            # cross-encoder 精排：query 和 doc 拼一起送入模型，输出相关性分数
+            docs = [item.get("content", "") for item in items]
+            scores = rerank_cross_encoder(query, docs)
+            for item, score in zip(items, scores):
+                item["rerank_score"] = score
+            logger.debug(f"cross-encoder rerank，分数: {scores}")
+        else:
+            # 降级：bi-encoder 余弦相似度重排
+            query_vec = embed_query(query)
+            for item in items:
+                doc_vec = embed(item.get("content", ""))
+                item["rerank_score"] = cosine_similarity(query_vec, doc_vec)
+            logger.debug("降级为 bi-encoder 余弦相似度 rerank")
+
         items.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
         return items
 
