@@ -35,7 +35,7 @@ DECAY_HALF_LIFE_DAYS = float(os.getenv("DECAY_HALF_LIFE_DAYS", "7"))  # 记忆�
 CONSOLIDATION_THRESHOLD = int(os.getenv("CONSOLIDATION_THRESHOLD", "5"))  # 触发巩固的对话轮数
 
 # ---- 情绪系统 ----
-EMOTION_DECAY_RATE = float(os.getenv("EMOTION_DECAY_RATE", "0.05"))  # 每轮情绪向基线衰减
+EMOTION_DECAY_RATE = float(os.getenv("EMOTION_DECAY_RATE", "0.15"))  # 每轮情绪向基线衰减
 INITIAL_FAVORABILITY = int(os.getenv("INITIAL_FAVORABILITY", "10"))  # 初始好感度
 
 # ---- LLM 配置（DeepSeek，OpenAI 兼容协议）----
@@ -51,6 +51,16 @@ if not LLM_ENABLED:
 # LLM 生成参数
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.8"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+
+# ---- RAG 检索 ----
+# cross-encoder 精排（bge-reranker）：比 bi-encoder 余弦相似度更准，但更慢
+ENABLE_CROSS_ENCODER_RERANK = os.getenv("ENABLE_CROSS_ENCODER_RERANK", "true").lower() == "true"
+# cross-encoder 相关性阈值（分数可为负数，>0 通常表示相关）
+CROSS_ENCODER_THRESHOLD = float(os.getenv("CROSS_ENCODER_THRESHOLD", "0.0"))
+
+# ---- 上下文 Token 控制 ----
+# 工作记忆 token 上限（超出时从最早的消息开始截断，与 deque maxlen 双重控制）
+MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "8000"))
 
 # ---- Agent 配置 ----
 MAX_REACT_ITERATIONS = int(os.getenv("MAX_REACT_ITERATIONS", "3"))  # ReAct 最大迭代次数

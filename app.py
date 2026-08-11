@@ -40,10 +40,18 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 @app.on_event("startup")
 async def startup():
-    """启动时构建知识索引"""
+    """启动时构建知识索引 + 预加载模型（避免首次请求卡顿）"""
     indexer = KnowledgeIndexer()
     count = indexer.build_index()
     logger.info(f"角色知识索引就绪，共 {count} 个分块")
+
+    # 预加载模型到内存（懒加载触发，首次请求不再等模型加载）
+    import core.utils as _utils
+    _utils._get_model()      # BGE-small-zh embedding
+    _utils._get_reranker()   # BGE-reranker-base cross-encoder
+    _utils._get_encoder()    # tiktoken
+    logger.info("模型预加载完成")
+
     logger.info(f"开发者模式: {'开启' if ENABLE_DEVMODE else '关闭'}")
 
 

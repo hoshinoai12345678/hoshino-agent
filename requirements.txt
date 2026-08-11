@@ -8,3 +8,11 @@ pytest>=7.0
 sentence-transformers>=2.3  # BGE-small-zh 本地 embedding 模型
 python-telegram-bot>=20.7    # Telegram Bot 通道（async）
 itsdangerous>=2.1            # 签名 Cookie（登录态）
+
+# ---- 拓展功能依赖 ----
+tiktoken>=0.7                # token 精确计数（上下文长度控制）
+
+# ---- LangChain 对比实现（langchain_impl/）----
+langchain>=0.3
+langchain-openai>=0.2
+langchain-core>=0.3
