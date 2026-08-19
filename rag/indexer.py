@@ -1,29 +1,37 @@
-"""知识索引构建
+"""知识索引构建（多角色支持）
 
-将 data/knowledge/ 下的角色知识文档分块并向量化，存入 ChromaDB。
+将 data/characters/{character_id}/knowledge/ 下的角色知识文档分块并向量化，存入 ChromaDB。
+每个角色独立的 collection，实现多角色知识库隔离。
 """
 import json
 import time
 from pathlib import Path
 
-from config import KNOWLEDGE_DIR
+from config import get_knowledge_dir, DEFAULT_CHARACTER_ID
 from core.utils import embed_query, embed_batch
 from core.chroma_client import get_client, get_collection
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-COLLECTION_NAME = "persona_knowledge"
-# manifest 文件：记录每个知识文件的 mtime，用于判断是否需要重建索引
-_MANIFEST_FILE = Path(KNOWLEDGE_DIR) / ".index_manifest.json"
+# collection 前缀，实际 collection name = {COLLECTION_PREFIX}_{character_id}
+COLLECTION_PREFIX = "persona_knowledge"
 
 
 class KnowledgeIndexer:
-    """角色知识索引器"""
+    """角色知识索引器（按 character_id 隔离 collection）"""
 
-    def __init__(self):
+    def __init__(self, character_id: str = DEFAULT_CHARACTER_ID):
+        # 校验 character_id，防止 collection 名注入
+        if not character_id or not all(c.isalnum() or c in "_-" for c in character_id):
+            raise ValueError(f"非法 character_id: {character_id}（仅允许字母数字下划线横线）")
+        self._character_id = character_id
+        self._knowledge_dir = get_knowledge_dir(character_id)
+        self._collection_name = f"{COLLECTION_PREFIX}_{character_id}"
+        # manifest 文件：记录每个知识文件的 mtime，用于判断是否需要重建索引
+        self._manifest_file = Path(self._knowledge_dir) / ".index_manifest.json"
         self._collection = get_collection(
-            name=COLLECTION_NAME,
+            name=self._collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
@@ -35,15 +43,15 @@ class KnowledgeIndexer:
         Returns:
             当前索引的分块总数
         """
-        knowledge_path = Path(KNOWLEDGE_DIR)
+        knowledge_path = Path(self._knowledge_dir)
         if not knowledge_path.exists():
-            logger.warning(f"知识目录不存在: {KNOWLEDGE_DIR}")
+            logger.warning(f"知识目录不存在: {self._knowledge_dir}")
             return 0
 
         # 1. 扫描当前知识文件，计算 mtime 指纹
         md_files = sorted(knowledge_path.glob("*.md"))
         if not md_files:
-            logger.info("知识目录为空，索引 0 个分块")
+            logger.info(f"[{self._character_id}] 知识目录为空，索引 0 个分块")
             return 0
 
         current_manifest = {f.name: f.stat().st_mtime for f in md_files}
@@ -53,19 +61,19 @@ class KnowledgeIndexer:
             cached_manifest = self._load_manifest()
             if cached_manifest == current_manifest and self._collection.count() > 0:
                 count = self._collection.count()
-                logger.info(f"知识文件未变更，跳过重建（现有 {count} 个分块）")
+                logger.info(f"[{self._character_id}] 知识文件未变更，跳过重建（现有 {count} 个分块）")
                 return count
 
         # 3. 内容变更或首次构建：删除旧 collection + 全量重建
         # 用 client.delete_collection 彻底删除，避免 collection.delete() 残留数据
-        logger.info("检测到知识文件变更（或首次构建），开始重建索引...")
+        logger.info(f"[{self._character_id}] 检测到知识文件变更（或首次构建），开始重建索引...")
         client = get_client()
         try:
-            client.delete_collection(name=COLLECTION_NAME)
+            client.delete_collection(name=self._collection_name)
         except Exception as e:
             logger.debug(f"删除旧 collection（可能不存在）: {e}")
         self._collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
+            name=self._collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
@@ -77,7 +85,7 @@ class KnowledgeIndexer:
             all_chunks.extend(chunks)
 
         if not all_chunks:
-            logger.info("知识索引构建完成，共 0 个分块")
+            logger.info(f"[{self._character_id}] 知识索引构建完成，共 0 个分块")
             self._save_manifest(current_manifest)
             return 0
 
@@ -105,27 +113,25 @@ class KnowledgeIndexer:
         self._save_manifest(current_manifest)
 
         count = len(all_chunks)
-        logger.info(f"知识索引构建完成，共 {count} 个分块")
+        logger.info(f"[{self._character_id}] 知识索引构建完成，共 {count} 个分块")
         return count
 
-    @staticmethod
-    def _load_manifest() -> dict:
+    def _load_manifest(self) -> dict:
         """加载上次的 manifest（文件不存在返回空 dict）"""
         try:
-            if _MANIFEST_FILE.exists():
-                return json.loads(_MANIFEST_FILE.read_text(encoding="utf-8"))
+            if self._manifest_file.exists():
+                return json.loads(self._manifest_file.read_text(encoding="utf-8"))
         except Exception as e:
-            logger.warning(f"读取 manifest 失败，将触发重建: {e}")
+            logger.warning(f"[{self._character_id}] 读取 manifest 失败，将触发重建: {e}")
         return {}
 
-    @staticmethod
-    def _save_manifest(manifest: dict) -> None:
+    def _save_manifest(self, manifest: dict) -> None:
         """保存当前 manifest"""
         try:
-            _MANIFEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            self._manifest_file.parent.mkdir(parents=True, exist_ok=True)
+            self._manifest_file.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
-            logger.warning(f"保存 manifest 失败（不影响本次构建）: {e}")
+            logger.warning(f"[{self._character_id}] 保存 manifest 失败（不影响本次构建）: {e}")
 
     def _chunk(self, content: str, source: str) -> list[dict]:
         """按标题分块"""

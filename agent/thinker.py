@@ -32,7 +32,8 @@ _COMPLEX_SIGNALS = (
 class Thinker:
     """思考者 Agent：ReAct 前的语义理解与决策"""
 
-    def __init__(self):
+    def __init__(self, character_name: str = "角色"):
+        self._character_name = character_name
         self._client: Optional[AsyncOpenAI] = None
         if LLM_ENABLED:
             try:
@@ -72,7 +73,7 @@ class Thinker:
             resp = await self._client.chat.completions.create(
                 model=LLM_MODEL,
                 messages=[
-                    {"role": "system", "content": "你是星野爱的内心思考助手，分析用户请求并输出结构化思考。只输出JSON。"},
+                    {"role": "system", "content": f"你是{self._character_name}的内心思考助手，分析用户请求并输出结构化思考。只输出JSON。"},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
@@ -117,8 +118,7 @@ class Thinker:
             logger.error(f"Thinker 失败: {e}")
             return self._fallback_thought(user_message, has_complex_signal)
 
-    @staticmethod
-    def _fallback_thought(user_message: str, has_complex_signal: bool) -> dict:
+    def _fallback_thought(self, user_message: str, has_complex_signal: bool) -> dict:
         """LLM 失败/空返回/JSON 解析失败的降级：用规则生成简短角色化独白
 
         保证 dev_mode 思考链总有内容展示，system prompt 总有上下文注入。
@@ -126,9 +126,9 @@ class Thinker:
         独白只是辅助上下文，简短独白不会误导 ReAct。
         """
         snippet = user_message[:30] + ("..." if len(user_message) > 30 else "")
-        monologue = f"爱听到你说「{snippet}」~让爱想想怎么回应才好呢♪"
+        monologue = f"{self._character_name}听到你说「{snippet}」，让{self._character_name}想想怎么回应。"
         if has_complex_signal:
-            monologue += " 这件事有好几步，爱要一个一个来~"
+            monologue += " 这件事有好几步，要一个一个来。"
         return {
             "intent": "",
             "user_emotion": "",
@@ -140,8 +140,7 @@ class Thinker:
             "inner_monologue": monologue,
         }
 
-    @staticmethod
-    def _build_prompt(user_message: str, retrieval_ctx: str,
+    def _build_prompt(self, user_message: str, retrieval_ctx: str,
                       emotion_ctx: str, semantic_ctx: str,
                       has_complex_signal: bool = False) -> str:
         signal_hint = f"（已检测到多任务关键词，请重点判断是否需要拆解）" if has_complex_signal else ""
@@ -160,7 +159,7 @@ class Thinker:
 
 【多任务判断标准】
 - needs_plan=true：请求包含多个子任务、需要组合多种工具、需要先检索再回答
-  例："我叫小枫，记住我喜欢草莓，然后告诉我爱酱的口头禅" → 拆为 [save_memory, save_memory, search_knowledge, reply]
+  例："我叫小枫，记住我喜欢草莓，然后告诉我{self._character_name}的口头禅" → 拆为 [save_memory, save_memory, search_knowledge, reply]
 - needs_plan=false：单轮问答、简单问候、闲聊、直接回复
 
 【可用 action】
@@ -180,7 +179,7 @@ class Thinker:
     {{"action": "save_memory", "target": "...", "reason": "..."}}
   ],
   "strategy": "回应策略（如何回复才符合角色且让用户舒适）",
-  "inner_monologue": "用星野爱第一人称写的内心独白（自称'爱'，活泼偶像风格，带情感和符号）。自然表达：对用户这句话的反应、当前感受、打算怎么回应、是否需要查记忆/知识库。多任务时自然提到'先...再...'。像真实内心活动，不要用机械标签或列表格式。"
+  "inner_monologue": "用{self._character_name}第一人称写的内心独白（符合角色性格和说话风格）。自然表达：对用户这句话的反应、当前感受、打算怎么回应、是否需要查记忆/知识库。多任务时自然提到'先...再...'。像真实内心活动，不要用机械标签或列表格式。"
 }}
 
 只输出JSON："""
@@ -189,7 +188,7 @@ class Thinker:
         """把思考结果转为角色化内心独白
 
         作为 system prompt 注入 + dev_mode 思考链展示（同一份文本，本末一致）。
-        优先用 LLM 生成的 inner_monologue（星野爱第一人称）；
+        优先用 LLM 生成的 inner_monologue（角色第一人称）；
         降级时用 strategy 拼简短独白，保证总有内容。
         """
         if not thought:
@@ -207,5 +206,5 @@ class Thinker:
 
         intent = thought.get("intent", "")
         if intent:
-            return f"爱在想：{intent}。{strategy}"
-        return f"爱心里想：{strategy}"
+            return f"{self._character_name}在想：{intent}。{strategy}"
+        return f"{self._character_name}心里想：{strategy}"

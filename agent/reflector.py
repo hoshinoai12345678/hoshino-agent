@@ -19,7 +19,8 @@ logger = get_logger(__name__)
 class Reflector:
     """反思引擎（基于 JSON 模式 + 强化提取）"""
 
-    def __init__(self):
+    def __init__(self, character_name: str = "角色"):
+        self._character_name = character_name
         self._client: Optional[AsyncOpenAI] = None
         if LLM_ENABLED:
             try:
@@ -43,7 +44,7 @@ class Reflector:
             return self._default_result()
 
         try:
-            prompt = build_reflection_prompt(user_message, assistant_reply, emotion_ctx)
+            prompt = build_reflection_prompt(user_message, assistant_reply, emotion_ctx, self._character_name)
             resp = await self._client.chat.completions.create(
                 model=LLM_MODEL,
                 messages=[

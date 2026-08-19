@@ -2,12 +2,17 @@
 
 所有模块通过 get_logger(__name__) 获取 logger，确保日志格式统一、级别可控。
 支持环境变量 LOG_LEVEL 控制输出级别（DEBUG/INFO/WARNING/ERROR）。
+降级日志用红色高亮（red_warning），便于在终端快速定位降级事件。
 """
 import logging
 import os
 import sys
 
 _LOG_CONFIGURED = False
+
+# ANSI 颜色码（Windows Terminal / 现代终端支持）
+_RED = "\033[91m"
+_RESET = "\033[0m"
 
 
 def _configure_logging():
@@ -33,3 +38,8 @@ def get_logger(name: str) -> logging.Logger:
     """获取统一配置的 logger"""
     _configure_logging()
     return logging.getLogger(name)
+
+
+def red_warning(logger: logging.Logger, msg: str):
+    """打印标红警告日志（降级场景专用，终端中红色高亮）"""
+    logger.warning(f"{_RED}{msg}{_RESET}")

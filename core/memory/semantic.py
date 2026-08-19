@@ -2,12 +2,13 @@
 
 存储从对话中蒸馏出的稳定用户特征。
 使用 SQLite 存储结构化画像数据。
+按 character_id + session_id 双维度隔离，实现多角色多用户数据分离。
 """
 import sqlite3
 import time
 from typing import Optional
 
-from config import MEMORY_DB_PATH
+from config import MEMORY_DB_PATH, DEFAULT_CHARACTER_ID
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -16,18 +17,22 @@ logger = get_logger(__name__)
 class SemanticMemory:
     """语义记忆：用户画像蒸馏
 
-    每个 session 拥有独立的表（user_profile_{session_id}），
-    实现多用户数据隔离。SQLite 连接在类级别共享。
+    按 character_id + session_id 双维度隔离：
+    表名 = user_profile_{character_id}_{session_id}
+    实现多角色多用户数据隔离。SQLite 连接在类级别共享。
     """
 
     _conn: Optional[sqlite3.Connection] = None
 
-    def __init__(self, session_id: str = "default"):
-        # 校验 session_id，防止表名注入
-        if not session_id or not all(c.isalnum() or c in "_-" for c in session_id):
-            raise ValueError(f"非法 session_id: {session_id}（仅允许字母数字下划线横线）")
+    def __init__(self, session_id: str = "default",
+                 character_id: str = DEFAULT_CHARACTER_ID):
+        # 校验 character_id 和 session_id，防止表名注入
+        for name, val in [("character_id", character_id), ("session_id", session_id)]:
+            if not val or not all(c.isalnum() or c in "_-" for c in val):
+                raise ValueError(f"非法 {name}: {val}（仅允许字母数字下划线横线）")
         self._session_id = session_id
-        self._table = f"user_profile_{session_id}"
+        self._character_id = character_id
+        self._table = f"user_profile_{character_id}_{session_id}"
         self._ensure_db()
 
     def _ensure_db(self):
@@ -110,7 +115,7 @@ class SemanticMemory:
             return 0
         # 重建空表，保证后续 add 可用
         self._ensure_db()
-        logger.info(f"已清空 session={self._session_id} 的语义记忆，共 {deleted} 条")
+        logger.info(f"已清空 character={self._character_id} session={self._session_id} 的语义记忆，共 {deleted} 条")
         return deleted
 
     def to_prompt_context(self) -> str:

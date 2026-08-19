@@ -1,16 +1,27 @@
 /* =========================================================
- * API 辅助模块 - 封装后端接口调用
+ * API 辅助模块 - 封装后端接口调用（多角色支持）
  * ========================================================= */
 (function (global) {
   "use strict";
 
   const API = {
-    /** 流式聊天（SSE）*/
-    async *chatStream(message, devMode = false) {
+    /** 获取可用角色列表 */
+    async getCharacters() {
+      const resp = await fetch("/api/characters");
+      return resp.json();
+    },
+
+    /** 流式聊天（SSE）
+     *  characterId: 角色ID（可选，默认后端 DEFAULT_CHARACTER_ID）
+     */
+    async *chatStream(message, devMode = false, characterId = null) {
+      const body = { message, dev_mode: devMode };
+      if (characterId) body.character_id = characterId;
+
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, dev_mode: devMode }),
+        body: JSON.stringify(body),
       });
 
       if (!resp.ok) throw new Error(`请求失败 (${resp.status})`);
@@ -44,75 +55,81 @@
     },
 
     /** 获取 Agent 状态 */
-    async getState() {
-      const resp = await fetch("/api/state");
+    async getState(characterId = null) {
+      const url = characterId ? `/api/state?character_id=${encodeURIComponent(characterId)}` : "/api/state";
+      const resp = await fetch(url);
       return resp.json();
     },
 
     /** 获取对话历史（工作记忆）*/
-    async getHistory() {
-      const resp = await fetch("/api/history");
+    async getHistory(characterId = null) {
+      const url = characterId ? `/api/history?character_id=${encodeURIComponent(characterId)}` : "/api/history";
+      const resp = await fetch(url);
       return resp.json();
     },
 
     /** 重置 Agent */
-    async reset() {
-      const resp = await fetch("/api/reset", { method: "POST" });
+    async reset(characterId = null) {
+      const url = characterId ? `/api/reset?character_id=${encodeURIComponent(characterId)}` : "/api/reset";
+      const resp = await fetch(url, { method: "POST" });
       return resp.json();
     },
 
     /** 忘记我（清空长期记忆：情景记忆+用户画像）*/
-    async forget() {
-      const resp = await fetch("/api/forget", { method: "POST" });
+    async forget(characterId = null) {
+      const url = characterId ? `/api/forget?character_id=${encodeURIComponent(characterId)}` : "/api/forget";
+      const resp = await fetch(url, { method: "POST" });
       if (!resp.ok) throw new Error(`请求失败 (${resp.status})`);
       return resp.json();
     },
 
     /** 获取记忆列表（支持分页）*/
-  async getMemories(limit = 20, offset = 0) {
-    const resp = await fetch(`/api/memories?limit=${limit}&offset=${offset}`);
-    return resp.json();
-  },
+    async getMemories(limit = 20, offset = 0, characterId = null) {
+      let url = `/api/memories?limit=${limit}&offset=${offset}`;
+      if (characterId) url += `&character_id=${encodeURIComponent(characterId)}`;
+      const resp = await fetch(url);
+      return resp.json();
+    },
 
-  // ---- 认证相关 ----
+    // ---- 认证相关 ----
 
-  /** 注册 */
-  async register(username, password) {
-    const resp = await fetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "注册失败");
-    return data;
-  },
+    /** 注册 */
+    async register(username, password) {
+      const resp = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "注册失败");
+      return data;
+    },
 
-  /** 登录（后端设置 HttpOnly Cookie）*/
-  async login(username, password) {
-    const resp = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "登录失败");
-    return data;
-  },
+    /** 登录（后端设置 HttpOnly Cookie）*/
+    async login(username, password) {
+      const resp = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "登录失败");
+      return data;
+    },
 
-  /** 登出 */
-  async logout() {
-    const resp = await fetch("/api/auth/logout", { method: "POST" });
-    return resp.json();
-  },
+    /** 登出 */
+    async logout() {
+      const resp = await fetch("/api/auth/logout", { method: "POST" });
+      return resp.json();
+    },
 
-  /** 获取当前登录用户（401 表示未登录）*/
-  async getMe() {
-    const resp = await fetch("/api/auth/me");
-    if (resp.status === 401) return null;
-    if (!resp.ok) throw new Error("获取用户信息失败");
-    return resp.json();
-  },
+    /** 获取当前登录用户（401 表示未登录）*/
+    async getMe() {
+      const resp = await fetch("/api/auth/me");
+      if (resp.status === 401) return null;
+      if (!resp.ok) throw new Error("获取用户信息失败");
+      return resp.json();
+    },
   };
 
   /** 转义 HTML */

@@ -11,7 +11,8 @@
 from typing import Optional
 
 from config import (KNOWLEDGE_TOP_K, EPISODIC_TOP_K,
-                    ENABLE_CROSS_ENCODER_RERANK, CROSS_ENCODER_THRESHOLD)
+                    ENABLE_CROSS_ENCODER_RERANK, CROSS_ENCODER_THRESHOLD,
+                    DEFAULT_CHARACTER_ID)
 from core.memory.episodic import EpisodicMemory
 from core.memory.semantic import SemanticMemory
 from core.utils import embed, embed_query, cosine_similarity, rerank_cross_encoder
@@ -26,15 +27,16 @@ BI_ENCODER_SIM_THRESHOLD = 0.35
 
 
 class HybridRetriever:
-    """混合检索器：知识 + 记忆"""
+    """混合检索器：知识 + 记忆（按 character_id 隔离知识库）"""
 
     def __init__(self, session_id: str = "default",
+                 character_id: str = DEFAULT_CHARACTER_ID,
                  episodic: Optional[EpisodicMemory] = None,
                  semantic: Optional[SemanticMemory] = None):
-        self.knowledge_indexer = KnowledgeIndexer()  # 角色知识全局共享
+        self.knowledge_indexer = KnowledgeIndexer(character_id=character_id)
         # 复用外部传入的实例，保证 clear() 后引用同步；未传入时自建（向后兼容）
-        self.episodic = episodic or EpisodicMemory(session_id=session_id)
-        self.semantic = semantic or SemanticMemory(session_id=session_id)
+        self.episodic = episodic or EpisodicMemory(session_id=session_id, character_id=character_id)
+        self.semantic = semantic or SemanticMemory(session_id=session_id, character_id=character_id)
 
     def retrieve(self, query: str) -> dict:
         """混合检索（去重 + rerank + 阈值过滤）

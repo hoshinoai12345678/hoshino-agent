@@ -2,34 +2,40 @@
 
 存储具体对话事件，支持语义检索。
 使用 ChromaDB 作为向量数据库，记录带时间戳的对话片段。
+按 character_id + session_id 双维度隔离，实现多角色多用户数据分离。
 """
 import time
 import uuid
 
-from config import VECTOR_DB_PATH, EPISODIC_TOP_K, DECAY_HALF_LIFE_DAYS
+from config import VECTOR_DB_PATH, EPISODIC_TOP_K, DECAY_HALF_LIFE_DAYS, DEFAULT_CHARACTER_ID
 from core.utils import embed, embed_query
 from core.chroma_client import get_collection, get_client
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-COLLECTION_NAME = "episodic_memory"
+COLLECTION_PREFIX = "episodic_memory"
 
 
 class EpisodicMemory:
     """情景记忆：存储和检索对话事件
 
-    每个 session 拥有独立的 collection（episodic_memory_{session_id}），
-    实现多用户数据隔离。ChromaDB client 在类级别共享。
+    按 character_id + session_id 双维度隔离：
+    collection name = episodic_memory_{character_id}_{session_id}
+    实现多角色多用户数据隔离。ChromaDB client 在类级别共享。
     """
 
-    def __init__(self, session_id: str = "default"):
-        # 校验 session_id，防止 collection 名注入
-        if not session_id or not all(c.isalnum() or c in "_-" for c in session_id):
-            raise ValueError(f"非法 session_id: {session_id}（仅允许字母数字下划线横线）")
+    def __init__(self, session_id: str = "default",
+                 character_id: str = DEFAULT_CHARACTER_ID):
+        # 校验 character_id 和 session_id，防止 collection 名注入
+        for name, val in [("character_id", character_id), ("session_id", session_id)]:
+            if not val or not all(c.isalnum() or c in "_-" for c in val):
+                raise ValueError(f"非法 {name}: {val}（仅允许字母数字下划线横线）")
         self._session_id = session_id
+        self._character_id = character_id
+        self._collection_name = f"{COLLECTION_PREFIX}_{character_id}_{session_id}"
         self._collection = get_collection(
-            name=f"{COLLECTION_NAME}_{self._session_id}",
+            name=self._collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
@@ -167,14 +173,14 @@ class EpisodicMemory:
             deleted = 0
         client = get_client()
         try:
-            client.delete_collection(name=f"{COLLECTION_NAME}_{self._session_id}")
+            client.delete_collection(name=self._collection_name)
         except Exception as e:
             logger.warning(f"删除 collection 失败（可能已不存在）: {e}")
             deleted = 0
         # 重建空 collection，保证后续 add/search 可用
         self._collection = client.get_or_create_collection(
-            name=f"{COLLECTION_NAME}_{self._session_id}",
+            name=self._collection_name,
             metadata={"hnsw:space": "cosine"},
         )
-        logger.info(f"已清空 session={self._session_id} 的情景记忆，共 {deleted} 条")
+        logger.info(f"已清空 character={self._character_id} session={self._session_id} 的情景记忆，共 {deleted} 条")
         return deleted

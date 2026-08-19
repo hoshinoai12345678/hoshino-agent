@@ -1,20 +1,25 @@
-"""评估脚本：可独立运行
+"""评估脚本：可独立运行（支持多角色）
 
 功能：
-- 读取 test_cases.json
+- 读取 test_cases_{character_id}.json（缺失则回退 test_cases.json，即星野爱默认）
 - 对每个用例调用 HoshinoAgent.chat_stream（asyncio.run）
 - 收集回复、工具调用、情绪变化
 - 计算四项指标（角色一致率/记忆召回准确率/工具调用成功率/情绪响应适当性）
-- 输出报告到控制台和 eval/report.json
+- 输出报告到控制台和 eval/report_{character_id}.json
 
 用法：
+    # 评估星野爱（默认）
     python -m eval.run_eval
-    或
     python eval/run_eval.py
+
+    # 评估紫灵
+    python eval/run_eval.py --character zi_ling
+    python -m eval.run_eval --character zi_ling
 
 注意：需要 LLM_ENABLED=True 才能跑 LLM 相关评估（角色/工具/情绪），
      否则降级为只跑记忆召回准确率（基于向量检索，不依赖 LLM）。
 """
+import argparse
 import asyncio
 import json
 import sys
@@ -26,7 +31,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from config import LLM_ENABLED, LLM_MODEL  # noqa: E402
+from config import LLM_ENABLED, LLM_MODEL, DEFAULT_CHARACTER_ID  # noqa: E402
 from agent.hoshino_agent import HoshinoAgent  # noqa: E402
 from rag.indexer import KnowledgeIndexer  # noqa: E402
 from eval.metrics import (  # noqa: E402
@@ -34,28 +39,54 @@ from eval.metrics import (  # noqa: E402
     memory_recall_accuracy,
     tool_call_success_rate,
     emotion_response_appropriateness,
+    PERSONA_KEYWORDS,
+    AI_SELF_REFERENCE_PATTERNS,
+    ZILING_PERSONA_KEYWORDS,
+    ZILING_SELF_REFERENCE_PATTERNS,
 )
 
 # 评估产物输出路径
 EVAL_DIR = Path(__file__).resolve().parent
-TEST_CASES_FILE = EVAL_DIR / "test_cases.json"
-REPORT_FILE = EVAL_DIR / "report.json"
 
 # 评估专用 session id（与正式 session 隔离，避免污染真实记忆）
 EVAL_SESSION_ID = "eval_run"
 EVAL_MEMORY_SESSION_ID = "eval_memory"
+
+# 各角色的评估配置：persona_keywords / self_reference_patterns / 测试用例文件名
+_CHARACTER_EVAL_CONFIG = {
+    "hoshino_ai": {
+        "persona_keywords": PERSONA_KEYWORDS,
+        "self_reference_patterns": AI_SELF_REFERENCE_PATTERNS,
+        "test_cases_file": "test_cases.json",
+    },
+    "zi_ling": {
+        "persona_keywords": ZILING_PERSONA_KEYWORDS,
+        "self_reference_patterns": ZILING_SELF_REFERENCE_PATTERNS,
+        "test_cases_file": "test_cases_zi_ling.json",
+    },
+}
 
 
 # ------------------------------------------------------------------
 # 工具函数
 # ------------------------------------------------------------------
 
-def load_test_cases() -> list[dict]:
-    """读取测试用例集"""
-    with open(TEST_CASES_FILE, "r", encoding="utf-8") as f:
+def load_test_cases(character_id: str) -> list[dict]:
+    """读取指定角色的测试用例集
+
+    优先读取 test_cases_{character_id}.json，缺失则回退到 test_cases.json
+    （保持星野爱默认用例的向后兼容）。
+    """
+    config = _CHARACTER_EVAL_CONFIG.get(character_id, {})
+    filename = config.get("test_cases_file", f"test_cases_{character_id}.json")
+    test_file = EVAL_DIR / filename
+    if not test_file.exists():
+        # 回退到默认 test_cases.json
+        test_file = EVAL_DIR / "test_cases.json"
+    with open(test_file, "r", encoding="utf-8") as f:
         data = json.load(f)
     cases = data.get("test_cases", [])
-    print(f"[eval] 已加载 {len(cases)} 个测试用例")
+    print(f"[eval] 角色 [{character_id}] 已加载 {len(cases)} 个测试用例（来源: {test_file.name}）")
     return cases
 
 
@@ -107,7 +138,7 @@ async def run_single_case(agent: HoshinoAgent, user_message: str) -> dict:
 
 
 # ------------------------------------------------------------------
-# 记忆召回测试数据
+# 记忆召回测试数据（与角色无关，测的是检索机制本身）
 # ------------------------------------------------------------------
 
 MEMORY_TEST_CASES = {
@@ -138,13 +169,18 @@ MEMORY_TEST_CASES = {
 # 评估主流程
 # ------------------------------------------------------------------
 
-def evaluate_with_llm(test_cases: list[dict]) -> dict:
+def evaluate_with_llm(test_cases: list[dict], character_id: str) -> dict:
     """LLM 可用时的完整评估流程
 
     跑通：角色一致性、工具调用、情绪响应、记忆召回 四项指标
     """
-    print("\n[eval] LLM 已启用，运行完整评估（含角色/工具/情绪）...")
-    agent = HoshinoAgent(session_id=EVAL_SESSION_ID)
+    print(f"\n[eval] LLM 已启用，运行 [{character_id}] 完整评估（含角色/工具/情绪）...")
+    agent = HoshinoAgent(session_id=EVAL_SESSION_ID, character_id=character_id)
+
+    # 取该角色的评估配置（persona_keywords / self_reference_patterns）
+    char_config = _CHARACTER_EVAL_CONFIG.get(character_id, {})
+    persona_keywords = char_config.get("persona_keywords", PERSONA_KEYWORDS)
+    self_ref_patterns = char_config.get("self_reference_patterns", AI_SELF_REFERENCE_PATTERNS)
 
     case_results: list[dict] = []
     all_replies: list[str] = []
@@ -212,8 +248,12 @@ def evaluate_with_llm(test_cases: list[dict]) -> dict:
     print("\n" + "=" * 60)
     print("[eval] 计算汇总指标...")
 
-    # 1. 角色一致率
-    persona_score = persona_consistency_rate(all_replies)
+    # 1. 角色一致率（按角色关键词计算）
+    persona_score = persona_consistency_rate(
+        all_replies,
+        persona_keywords=persona_keywords,
+        self_reference_patterns=self_ref_patterns,
+    )
 
     # 2. 工具调用成功率
     tool_success = tool_call_success_rate(all_tool_calls)
@@ -221,8 +261,8 @@ def evaluate_with_llm(test_cases: list[dict]) -> dict:
     # 3. 情绪响应适当性（取均值）
     emotion_avg = sum(emotion_scores) / len(emotion_scores) if emotion_scores else 0.0
 
-    # 4. 记忆召回准确率（独立 session，避免污染）
-    memory_score = _run_memory_recall_test()
+    # 4. 记忆召回准确率（独立 session + 同角色，避免污染）
+    memory_score = _run_memory_recall_test(character_id)
 
     return {
         "summary": {
@@ -234,19 +274,20 @@ def evaluate_with_llm(test_cases: list[dict]) -> dict:
         "case_results": case_results,
         "llm_enabled": True,
         "llm_model": LLM_MODEL,
+        "character_id": character_id,
     }
 
 
-def evaluate_degraded(test_cases: list[dict]) -> dict:
+def evaluate_degraded(test_cases: list[dict], character_id: str) -> dict:
     """LLM 不可用时的降级评估
 
     仅运行记忆召回准确率（基于向量检索，不依赖 LLM），
     其余指标标记为 skipped。
     """
-    print("\n[eval] LLM 未启用，降级为只评估记忆召回准确率...")
+    print(f"\n[eval] LLM 未启用，降级为只评估 [{character_id}] 记忆召回准确率...")
     print("[eval] 提示：设置 LLM_API_KEY 或 LLM_ENABLED=True 可启用完整评估")
 
-    memory_score = _run_memory_recall_test()
+    memory_score = _run_memory_recall_test(character_id)
 
     # 占位的用例结果
     case_results = []
@@ -269,17 +310,20 @@ def evaluate_degraded(test_cases: list[dict]) -> dict:
         "case_results": case_results,
         "llm_enabled": False,
         "llm_model": None,
+        "character_id": character_id,
     }
 
 
-def _run_memory_recall_test() -> dict:
-    """运行记忆召回测试（独立 session）
+def _run_memory_recall_test(character_id: str) -> dict:
+    """运行记忆召回测试（独立 session + 同角色，避免污染）
 
-    使用专门的 eval_memory session，写入测试记忆后检索，避免污染主评估流程。
+    使用专门的 eval_memory session，写入测试记忆后检索。
+    记忆召回测试数据与角色无关（测的是检索机制），但写入到对应角色的
+    collection，保证角色隔离下的检索行为正确。
     """
-    print("\n[eval] 运行记忆召回测试（session=eval_memory）...")
+    print(f"\n[eval] 运行记忆召回测试（session=eval_memory, character={character_id}）...")
     try:
-        mem_agent = HoshinoAgent(session_id=EVAL_MEMORY_SESSION_ID)
+        mem_agent = HoshinoAgent(session_id=EVAL_MEMORY_SESSION_ID, character_id=character_id)
     except Exception as e:
         print(f"[eval] 记忆测试 agent 初始化失败: {e}")
         return {"precision": 0.0, "recall": 0.0}
@@ -312,10 +356,12 @@ def _check_tool_match(actual_tool_calls: list[dict], expected_tool: str) -> str:
 # 报告输出
 # ------------------------------------------------------------------
 
-def print_report(report: dict) -> None:
+def print_report(report: dict, character_id: str) -> None:
     """打印评估报告到控制台"""
+    char_name_map = {"hoshino_ai": "星野爱", "zi_ling": "紫灵"}
+    char_name = char_name_map.get(character_id, character_id)
     print("\n" + "=" * 60)
-    print("🌟 星野爱 Agent 评估报告")
+    print(f"🌟 {char_name} Agent 评估报告")
     print("=" * 60)
     print(f"LLM 启用: {report['llm_enabled']}")
     if report.get("llm_model"):
@@ -346,11 +392,12 @@ def print_report(report: dict) -> None:
     print("=" * 60)
 
 
-def save_report(report: dict) -> None:
-    """保存报告到 eval/report.json"""
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
+def save_report(report: dict, character_id: str) -> None:
+    """保存报告到 eval/report_{character_id}.json"""
+    report_file = EVAL_DIR / f"report_{character_id}.json"
+    with open(report_file, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
-    print(f"\n[eval] 报告已保存到: {REPORT_FILE}")
+    print(f"\n[eval] 报告已保存到: {report_file}")
 
 
 # ------------------------------------------------------------------
@@ -359,31 +406,43 @@ def save_report(report: dict) -> None:
 
 def main() -> None:
     """评估入口"""
+    parser = argparse.ArgumentParser(description="多角色 Agent 评估脚本")
+    parser.add_argument(
+        "--character", "-c",
+        default=DEFAULT_CHARACTER_ID,
+        help=f"评估的角色ID（默认 {DEFAULT_CHARACTER_ID}）",
+    )
+    args = parser.parse_args()
+    character_id = args.character
+
+    char_name_map = {"hoshino_ai": "星野爱", "zi_ling": "紫灵"}
+    char_name = char_name_map.get(character_id, character_id)
+
     print("=" * 60)
-    print("🌟 星野爱 Agent 评估体系启动")
+    print(f"🌟 {char_name} Agent 评估体系启动（character_id={character_id}）")
     print("=" * 60)
 
     # 构建知识索引（eval 不走 app startup，需手动构建）
-    indexer = KnowledgeIndexer()
+    indexer = KnowledgeIndexer(character_id=character_id)
     count = indexer.build_index()
-    print(f"[eval] 知识索引就绪，共 {count} 个分块")
+    print(f"[eval] [{character_id}] 知识索引就绪，共 {count} 个分块")
 
-    test_cases = load_test_cases()
+    test_cases = load_test_cases(character_id)
     if not test_cases:
         print("[eval] 未找到测试用例，退出")
         return
 
     # 根据 LLM 状态选择完整/降级评估
     if LLM_ENABLED:
-        report = evaluate_with_llm(test_cases)
+        report = evaluate_with_llm(test_cases, character_id)
     else:
-        report = evaluate_degraded(test_cases)
+        report = evaluate_degraded(test_cases, character_id)
 
     report["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
     report["total_cases"] = len(test_cases)
 
-    print_report(report)
-    save_report(report)
+    print_report(report, character_id)
+    save_report(report, character_id)
 
 
 if __name__ == "__main__":

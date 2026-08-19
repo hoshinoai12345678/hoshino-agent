@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, asdict
 from typing import Optional
 
-from config import EMOTION_DECAY_RATE, MEMORY_DB_PATH
+from config import EMOTION_DECAY_RATE, MEMORY_DB_PATH, DEFAULT_CHARACTER_ID
 from core.persona import Persona
 from core.logger import get_logger
 
@@ -46,25 +46,30 @@ class EmotionState:
 class EmotionEngine:
     """情绪状态机
 
-    P/A/D 短期波动 + 好感度长期积累，均持久化到 SQLite（按 session 隔离）。
+    P/A/D 短期波动 + 好感度长期积累，均持久化到 SQLite。
+    按 character_id + session_id 双维度隔离：
+    表名 = emotion_state_{character_id}_{session_id}
     """
 
     _conn: Optional[sqlite3.Connection] = None
 
-    def __init__(self, session_id: str = "default"):
-        # 校验 session_id，防止表名注入（与 SemanticMemory 一致）
-        if not session_id or not all(c.isalnum() or c in "_-" for c in session_id):
-            raise ValueError(f"非法 session_id: {session_id}（仅允许字母数字下划线横线）")
+    def __init__(self, session_id: str = "default",
+                 character_id: str = DEFAULT_CHARACTER_ID):
+        # 校验 character_id 和 session_id，防止表名注入
+        for name, val in [("character_id", character_id), ("session_id", session_id)]:
+            if not val or not all(c.isalnum() or c in "_-" for c in val):
+                raise ValueError(f"非法 {name}: {val}（仅允许字母数字下划线横线）")
         self._session_id = session_id
-        self._table = f"emotion_state_{session_id}"
+        self._character_id = character_id
+        self._table = f"emotion_state_{character_id}_{session_id}"
         self._ensure_db()
 
-        persona = Persona()
+        persona = Persona(character_id=character_id)
         baseline = persona.emotion_baseline
         self._baseline = EmotionState(
-            pleasure=baseline.get("pleasure", 0.3),
-            arousal=baseline.get("arousal", 0.5),
-            dominance=baseline.get("dominance", 0.2),
+            pleasure=baseline.get("pleasure", 0.0),
+            arousal=baseline.get("arousal", 0.0),
+            dominance=baseline.get("dominance", 0.0),
             favorability=persona.initial_favorability,
             updated_at=time.time(),
         )
@@ -184,24 +189,45 @@ class EmotionEngine:
         """根据 PAD 三维值推断情绪标签
 
         P=愉悦度, A=唤醒度, D=支配度。
-        D 高=自信掌控, D 低=顺从被动，与 P/A 组合产生更精细的情绪标签。
+        P/A 各分四档（强负/弱负/弱正/强正），D 分两档（顺从/掌控），
+        形成 4×4×2=32 格精细化标签，避免雷同。
+        阈值用 0.05/0.35 避开常见 baseline 边界，防止抖动跳变。
         """
         p, a, d = self._state.pleasure, self._state.arousal, self._state.dominance
-        if p > 0.3 and a > 0.3:
-            return "自信兴奋" if d > 0.2 else "羞涩兴奋"
-        if p > 0.3 and a < -0.2:
-            return "满足放松" if d > 0 else "安心依赖"
-        if p > 0.3:
-            return "愉快自信" if d > 0.2 else "愉快温顺"
-        if p < -0.3 and a > 0.3:
-            return "焦躁强硬" if d > 0.2 else "焦虑不安"
-        if p < -0.3 and a < -0.2:
-            return "低落消沉" if d < 0 else "委屈被动"
-        if p < -0.3:
-            return "不悦倔强" if d > 0.2 else "委屈"
-        if a > 0.5:
-            return "激动"
-        return "平淡"
+
+        def band(v: float) -> int:
+            """四档：0=强负, 1=弱负, 2=弱正, 3=强正"""
+            if v < -0.3:
+                return 0
+            if v < 0.05:
+                return 1
+            if v < 0.35:
+                return 2
+            return 3
+
+        pb, ab = band(p), band(a)
+        high_d = d >= 0.1  # D≥0.1 掌控自信, D<0.1 顺从依赖
+
+        # (P档, A档) → (D低:顺从依赖, D高:掌控自信)
+        _TABLE: dict[tuple[int, int], tuple[str, str]] = {
+            (3, 3): ("雀跃依恋", "自信兴奋"),   # 强正P 激昂A
+            (3, 2): ("欣喜温顺", "愉悦自信"),   # 强正P 活跃A
+            (3, 1): ("满足依赖", "惬意从容"),   # 强正P 平缓A
+            (3, 0): ("慵懒安适", "恬淡自若"),   # 强正P 沉静A
+            (2, 3): ("激动期待", "兴致勃勃"),   # 弱正P 激昂A
+            (2, 2): ("欢喜亲近", "轻松愉快"),   # 弱正P 活跃A
+            (2, 1): ("平和安稳", "从容淡定"),   # 弱正P 平缓A
+            (2, 0): ("安静闲适", "沉静内敛"),   # 弱正P 沉静A
+            (1, 3): ("慌张无措", "烦躁警惕"),   # 弱负P 激昂A
+            (1, 2): ("微恼疏离", "冷淡戒备"),   # 弱负P 活跃A
+            (1, 1): ("怅然若失", "郁郁寡欢"),   # 弱负P 平缓A
+            (1, 0): ("倦怠无力", "消沉自闭"),   # 弱负P 沉静A
+            (0, 3): ("惊慌恐惧", "愠怒强硬"),   # 强负P 激昂A
+            (0, 2): ("焦虑不安", "愠怒抵触"),   # 强负P 活跃A
+            (0, 1): ("悲伤低落", "郁结难解"),   # 强负P 平缓A
+            (0, 0): ("哀痛绝望", "心如死灰"),   # 强负P 沉静A
+        }
+        return _TABLE[(pb, ab)][0 if not high_d else 1]
 
     def _favorability_level(self) -> str:
         fav = self._state.favorability

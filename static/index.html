@@ -3,16 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>星野爱 · 拟人化AI伴聊</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260802b" />
+  <title>拟人化AI伴聊 · 多角色 Agent</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260819e" />
 </head>
 <body>
   <!-- 登录/注册遮罩 -->
   <div class="auth-overlay" id="authOverlay" style="display:none;">
     <div class="auth-box">
-      <div class="auth-avatar">💕</div>
-      <h2 class="auth-title">星野爱</h2>
-      <p class="auth-subtitle" id="authSubtitle">登录后开始聊天~♪</p>
+      <div class="auth-avatar">💬</div>
+      <h2 class="auth-title">多角色AI伴聊</h2>
+      <p class="auth-subtitle" id="authSubtitle">登录后开始聊天</p>
       <form id="authForm">
         <input type="text" id="authUsername" placeholder="用户名" autocomplete="username" required />
         <input type="password" id="authPassword" placeholder="密码" autocomplete="current-password" required />
@@ -29,40 +29,48 @@
   </div>
 
   <div class="app">
-    <!-- 左侧聊天区 -->
+    <!-- 左侧联系人列表（微信风格） -->
+    <div class="contacts-sidebar">
+      <div class="contacts-header">
+        <span class="user-badge" id="userBadge" style="display:none;"></span>
+        <button class="btn btn-ghost" id="logoutBtn" style="display:none;" title="登出">登出</button>
+      </div>
+      <div class="contacts-list" id="contactsList">
+        <div class="empty">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 中间聊天区 -->
     <div class="chat-area">
       <div class="topbar">
-        <div class="avatar">💕</div>
+        <img class="topbar-avatar" id="topbarAvatar" src="/static/images/hoshino_ai.jpg" alt="avatar" />
         <div class="title-area">
-          <div class="name">星野爱</div>
-          <div class="status">在线 · 新B小町</div>
+          <div class="name" id="topbarName">加载中...</div>
+          <div class="status" id="topbarStatus">在线</div>
         </div>
         <div class="actions">
           <label class="switch" title="开发者模式（显示思考链）">
             <input type="checkbox" id="devSwitch" />
             <span class="slider"></span>
           </label>
-          <span class="user-badge" id="userBadge" style="display:none;"></span>
           <button class="btn btn-ghost" id="resetBtn">重置</button>
-          <button class="btn btn-danger" id="forgetBtn" title="清空长期记忆（情景记忆+用户画像），不可恢复">忘记我</button>
-          <button class="btn btn-ghost" id="logoutBtn" style="display:none;" title="登出">登出</button>
+          <button class="btn btn-danger" id="forgetBtn" title="清空长期记忆（情景记忆+用户画像+情绪好感），不可恢复">忘记我</button>
         </div>
       </div>
 
       <div class="messages" id="messages">
-        <div class="msg ai">
-          <div class="avatar">💕</div>
+        <div class="msg ai" id="welcomeMsg">
+          <img class="avatar" src="/static/images/hoshino_ai.jpg" alt="avatar" />
           <div class="bubble">
-            我是新B小町的星野爱！✨<br>
-            今天也一起开心地聊天吧~♪<br>
-            有什么想跟爱说的吗？
+            欢迎来到多角色AI伴聊~✨<br>
+            请在左侧选择一个角色开始对话。
           </div>
         </div>
       </div>
 
       <div class="input-area">
         <div class="input-wrap">
-          <textarea id="input" placeholder="跟爱说点什么..." rows="1"></textarea>
+          <textarea id="input" placeholder="跟角色说点什么..." rows="1"></textarea>
           <button id="sendBtn">发送</button>
         </div>
       </div>
@@ -136,7 +144,7 @@
           <div class="panel-section">
             <h4>用户画像 <span class="hint" id="profileCount"></span></h4>
             <div id="profileList">
-              <div class="empty">暂无用户画像，多聊几句让爱了解你~</div>
+              <div class="empty">暂无用户画像，多聊几句让角色了解你~</div>
             </div>
           </div>
           <div class="panel-section">
@@ -200,7 +208,7 @@
     </div>
   </div>
 
-  <script src="/static/js/api.js?v=20260802b"></script>
-  <script src="/static/js/chat.js?v=20260802b"></script>
+  <script src="/static/js/api.js?v=20260819e"></script>
+  <script src="/static/js/chat.js?v=20260819e"></script>
 </body>
 </html>

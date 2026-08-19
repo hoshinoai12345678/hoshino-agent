@@ -11,7 +11,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 
 from config import (LLM_API_KEY, LLM_API_BASE, LLM_MODEL, LLM_ENABLED,
-                    CONSOLIDATION_THRESHOLD)
+                    CONSOLIDATION_THRESHOLD, DEFAULT_CHARACTER_ID)
 from core.memory.episodic import EpisodicMemory
 from core.memory.semantic import SemanticMemory
 from core.memory.working import WorkingMemory
@@ -24,11 +24,12 @@ class MemoryConsolidator:
     """记忆巩固引擎"""
 
     def __init__(self, session_id: str = "default",
+                 character_id: str = DEFAULT_CHARACTER_ID,
                  episodic: Optional[EpisodicMemory] = None,
                  semantic: Optional[SemanticMemory] = None):
         # 复用外部传入的实例，保证 clear() 后引用同步；未传入时自建（向后兼容）
-        self.episodic = episodic or EpisodicMemory(session_id=session_id)
-        self.semantic = semantic or SemanticMemory(session_id=session_id)
+        self.episodic = episodic or EpisodicMemory(session_id=session_id, character_id=character_id)
+        self.semantic = semantic or SemanticMemory(session_id=session_id, character_id=character_id)
         self.working = WorkingMemory()
         self._client: Optional[AsyncOpenAI] = None
         if LLM_ENABLED:

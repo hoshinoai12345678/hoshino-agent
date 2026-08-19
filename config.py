@@ -22,10 +22,45 @@ os.environ.setdefault("HF_HOME", HF_CACHE_DIR)
 
 # ---- 数据存储 ----
 DATA_DIR = BASE_DIR / "data"
-PERSONA_FILE = str(DATA_DIR / "persona.json")
-KNOWLEDGE_DIR = str(DATA_DIR / "knowledge")
+# 多角色目录：每个角色一个子目录，含 persona.json + knowledge/
+# 结构：data/characters/{character_id}/persona.json + knowledge/*.md
+CHARACTERS_DIR = DATA_DIR / "characters"
+# 默认角色（向后兼容）
+DEFAULT_CHARACTER_ID = os.getenv("DEFAULT_CHARACTER_ID", "hoshino_ai")
 MEMORY_DB_PATH = os.getenv("MEMORY_DB_PATH", str(DATA_DIR / "memory.db"))
 VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", str(DATA_DIR / "vector_db"))
+
+
+def get_character_dir(character_id: str) -> Path:
+    """获取指定角色的目录路径"""
+    return CHARACTERS_DIR / character_id
+
+
+def get_persona_file(character_id: str) -> str:
+    """获取指定角色的人设文件路径"""
+    return str(get_character_dir(character_id) / "persona.json")
+
+
+def get_knowledge_dir(character_id: str) -> str:
+    """获取指定角色的知识库目录路径"""
+    return str(get_character_dir(character_id) / "knowledge")
+
+
+def list_available_characters() -> list[str]:
+    """扫描所有可用角色（含 persona.json 的子目录）"""
+    if not CHARACTERS_DIR.exists():
+        return []
+    characters = []
+    for d in CHARACTERS_DIR.iterdir():
+        if d.is_dir() and (d / "persona.json").exists():
+            characters.append(d.name)
+    return sorted(characters)
+
+
+# 向后兼容：旧代码可能引用 PERSONA_FILE / KNOWLEDGE_DIR
+# 指向默认角色，避免直接破坏
+PERSONA_FILE = get_persona_file(DEFAULT_CHARACTER_ID)
+KNOWLEDGE_DIR = get_knowledge_dir(DEFAULT_CHARACTER_ID)
 
 # ---- 记忆系统 ----
 WORKING_MEMORY_SIZE = int(os.getenv("WORKING_MEMORY_SIZE", "20"))  # 工作记忆保留近K轮

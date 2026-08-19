@@ -11,7 +11,7 @@ import os
 import re
 from typing import Optional
 
-from core.logger import get_logger
+from core.logger import get_logger, red_warning
 
 logger = get_logger(__name__)
 
@@ -67,9 +67,11 @@ def embed(text: str) -> list[float]:
         # BGE 推理：normalize=True 直接返回归一化向量
         vec = model.encode(text, normalize_embeddings=True)
         # 转为 float 列表（JSON 可序列化）
+        logger.info(f"BGE-small-zh embedding 成功 (文本长度={len(text)}, 维度={EMBEDDING_DIM})")
         return [float(x) for x in vec]
 
     # 降级：哈希嵌入
+    red_warning(logger, f"【降级】BGE-small-zh 不可用，降级为哈希嵌入 (文本长度={len(text)})")
     return _hash_embed(text)
 
 
@@ -159,7 +161,7 @@ def _get_reranker():
         if os.path.isdir(local_path) and os.path.exists(os.path.join(local_path, "model.safetensors")):
             model_source = local_path
             logger.info(f"使用本地 BGE-reranker-base 模型: {local_path}")
-            _RERANKER = CrossEncoder(model_source, model_kwargs={"local_files_only": True})
+            _RERANKER = CrossEncoder(model_source, local_files_only=True)
         else:
             model_source = "BAAI/bge-reranker-base"
             logger.info("本地未找到 BGE-reranker-base，尝试在线下载")
@@ -182,9 +184,12 @@ def rerank_cross_encoder(query: str, documents: list[str]) -> list[float]:
     """
     reranker = _get_reranker()
     if reranker is None or not documents:
+        if reranker is None and documents:
+            red_warning(logger, f"【降级】BGE-reranker 不可用，cross-encoder 精排降级 (文档数={len(documents)})")
         return [0.0] * len(documents)
     pairs = [[query, doc] for doc in documents]
     scores = reranker.predict(pairs)
+    logger.info(f"BGE-reranker cross-encoder 精排成功 (查询长度={len(query)}, 文档数={len(documents)})")
     # predict 返回 numpy 数组，统一转成 list[float]
     return [float(s) for s in scores]
 
@@ -263,6 +268,7 @@ def count_tokens(text: str) -> int:
     if enc is not None:
         return len(enc.encode(text))
     # 降级：字符数 / 2 粗略估算
+    red_warning(logger, f"【降级】tiktoken 不可用，token 计数降级为字符估算 (字符数={len(text)})")
     return len(text) // 2
 
 

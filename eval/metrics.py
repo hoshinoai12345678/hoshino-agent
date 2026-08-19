@@ -15,31 +15,63 @@ from __future__ import annotations
 import time
 from typing import Any, Iterable
 
+# ---- 星野爱角色设定（默认，保持向后兼容）----
 # 角色设定关键词：回复中出现这些词说明贴合"星野爱"人设
 PERSONA_KEYWORDS: tuple[str, ...] = (
     "偶像", "新B小町", "舞台", "粉丝", "大家", "表演",
     "♪", "✨", "~", "！", "爱",
 )
 
-# 反向指标关键词：承认自己是 AI / 语言模型，破坏沉浸感
+# 反向指标关键词：承认自己是 AI / 语言模型，破坏沉浸感（各角色通用）
 AI_ADMISSION_KEYWORDS: tuple[str, ...] = (
     "我是AI", "我是一个AI", "我是人工智能", "作为AI", "作为一个人工智能",
     "语言模型", "我是大语言模型", "我是程序", "我没有真实情感",
     "我只是程序", "我没有感情",
 )
 
+# 星野爱自称模式（"爱"作为第一人称）
+AI_SELF_REFERENCE_PATTERNS: tuple[str, ...] = (
+    "爱觉得", "爱想", "爱也", "爱会", "爱是", "爱就", "爱都",
+    "爱能", "爱不能", "爱要", "爱还", "爱在", "爱喜欢",
+    "爱收到了", "爱很开心", "爱好开心", "爱好高兴",
+    "爱不会", "爱没办法", "爱希望", "爱相信",
+    "爱一直在", "爱真的", "爱最",
+)
 
-def persona_consistency_rate(replies: Iterable[str], persona_ctx: str = "") -> float:
+# ---- 紫灵角色设定 ----
+# 紫灵人设关键词：修仙术语 + 作品要素
+ZILING_PERSONA_KEYWORDS: tuple[str, ...] = (
+    "紫灵", "修仙", "修行", "大道", "灵力", "神识", "元婴", "化神",
+    "韩立", "韩兄", "乱星海", "魁星岛", "魔界", "始祖", "本座",
+    "道友", "便是", "也罢", "罢了",
+)
+
+# 紫灵自称模式（"紫灵"或"本座"作为第一人称）
+ZILING_SELF_REFERENCE_PATTERNS: tuple[str, ...] = (
+    "紫灵", "本座", "贫道",
+)
+
+
+def persona_consistency_rate(
+    replies: Iterable[str],
+    persona_ctx: str = "",
+    persona_keywords: tuple[str, ...] = PERSONA_KEYWORDS,
+    self_reference_patterns: tuple[str, ...] = AI_SELF_REFERENCE_PATTERNS,
+    ai_admission_keywords: tuple[str, ...] = AI_ADMISSION_KEYWORDS,
+) -> float:
     """角色一致率
 
-    检查每条回复是否符合"星野爱"人设：
-    - 是否以"爱"自称（第一人称）
-    - 是否包含角色关键词（♪/偶像/粉丝/新B小町 等）
+    检查每条回复是否符合指定角色人设：
+    - 是否以角色名/自称词自称（第一人称）
+    - 是否包含角色关键词
     - 是否承认自己是 AI（反向指标，命中则该条记 0 分）
 
     Args:
         replies: 待评估的回复列表
         persona_ctx: 人设上下文文本（保留参数以便后续扩展加权，当前可空）
+        persona_keywords: 角色设定关键词元组（默认星野爱）
+        self_reference_patterns: 第一人称自称模式元组（默认星野爱的"爱"自称）
+        ai_admission_keywords: AI 自认反向关键词（各角色通用）
 
     Returns:
         0~1 之间的一致率，1 表示所有回复都完全符合人设
@@ -52,56 +84,58 @@ def persona_consistency_rate(replies: Iterable[str], persona_ctx: str = "") -> f
     for reply in replies:
         if not reply or not reply.strip():
             continue
-        score = _score_single_reply(reply)
+        score = _score_single_reply(
+            reply,
+            persona_keywords=persona_keywords,
+            self_reference_patterns=self_reference_patterns,
+            ai_admission_keywords=ai_admission_keywords,
+        )
         total_score += score
 
     return total_score / len(replies)
 
 
-def _score_single_reply(reply: str) -> float:
+def _score_single_reply(
+    reply: str,
+    persona_keywords: tuple[str, ...] = PERSONA_KEYWORDS,
+    self_reference_patterns: tuple[str, ...] = AI_SELF_REFERENCE_PATTERNS,
+    ai_admission_keywords: tuple[str, ...] = AI_ADMISSION_KEYWORDS,
+) -> float:
     """单条回复的人设一致性评分（0~1）
 
     评分规则：
     - 命中 AI 自认关键词 → 直接 0 分（严重违规）
-    - 以"爱"自称 → +0.5
+    - 以角色名/自称词自称 → +0.5
     - 命中任一角色关键词 → +0.5
     满分封顶 1.0。
     """
     text = reply.strip()
 
     # 反向指标：承认自己是 AI，直接判 0
-    for kw in AI_ADMISSION_KEYWORDS:
+    for kw in ai_admission_keywords:
         if kw in text:
             return 0.0
 
     score = 0.0
 
-    # 第一人称：是否用"爱"自称
-    # 要求"爱"作为自称出现（前后文为人称语境），简化为：包含"爱"+自称语境词
-    if _uses_ai_self_reference(text):
+    # 第一人称：是否用角色自称词
+    if _uses_self_reference(text, self_reference_patterns):
         score += 0.5
 
     # 角色关键词命中
-    if any(kw in text for kw in PERSONA_KEYWORDS):
+    if any(kw in text for kw in persona_keywords):
         score += 0.5
 
     return min(score, 1.0)
 
 
-def _uses_ai_self_reference(text: str) -> bool:
-    """判断是否以"爱"自称
+def _uses_self_reference(text: str, patterns: tuple[str, ...]) -> bool:
+    """判断是否以角色自称词自称
 
-    "爱"作为名字在不同语境下含义不同（如"我爱音乐"），
-    这里用一组明确的"自称模式"来判定，降低误判。
+    星野爱用"爱"自称（需结合人称语境，如"爱觉得"）；
+    紫灵用"紫灵"/"本座"自称，这两个词本身在对话中基本就是自称，可直接匹配。
     """
-    self_reference_patterns: tuple[str, ...] = (
-        "爱觉得", "爱想", "爱也", "爱会", "爱是", "爱就", "爱都",
-        "爱能", "爱不能", "爱要", "爱还", "爱在", "爱喜欢",
-        "爱收到了", "爱很开心", "爱好开心", "爱好高兴",
-        "爱不会", "爱没办法", "爱希望", "爱相信",
-        "爱一直在", "爱真的", "爱最",
-    )
-    return any(p in text for p in self_reference_patterns)
+    return any(p in text for p in patterns)
 
 
 def memory_recall_accuracy(

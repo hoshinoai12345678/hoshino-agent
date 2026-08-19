@@ -72,7 +72,7 @@ def test_to_prompt_context_multi_step_monologue():
 
 def test_to_prompt_context_fallback_no_monologue():
     """LLM 没返回 inner_monologue 时，用 intent + strategy 降级拼独白"""
-    t = Thinker()
+    t = Thinker(character_name="星野爱")
     thought = {
         "intent": "闲聊",
         "strategy": "轻松回应",
@@ -94,7 +94,7 @@ async def test_think_short_message_skip():
 @pytest.mark.asyncio
 async def test_think_no_llm_fallback():
     """LLM 不可用时降级返回角色化独白（保证思考链总有内容）"""
-    t = Thinker()
+    t = Thinker(character_name="星野爱")
     t._client = None
     thought = await t.think("请帮我分析今天的心情并且总结一下", "", "", "")
     # 降级路径：返回 _fallback_thought，含角色化 inner_monologue

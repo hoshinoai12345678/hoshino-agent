@@ -17,7 +17,8 @@ from openai import AsyncOpenAI
 
 from config import (LLM_API_KEY, LLM_API_BASE, LLM_MODEL, LLM_ENABLED,
                     LLM_TEMPERATURE, LLM_MAX_TOKENS, MAX_REACT_ITERATIONS,
-                    ENABLE_REFLECTION, ENABLE_DEVMODE, CONSOLIDATION_THRESHOLD)
+                    ENABLE_REFLECTION, ENABLE_DEVMODE, CONSOLIDATION_THRESHOLD,
+                    DEFAULT_CHARACTER_ID)
 from core.persona import Persona
 from core.emotion import EmotionEngine
 from core.memory.working import WorkingMemory
@@ -26,7 +27,7 @@ from core.memory.semantic import SemanticMemory
 from core.memory.consolidator import MemoryConsolidator
 from rag.retriever import HybridRetriever
 from agent.prompts import build_system_prompt
-from agent.tools import TOOL_DEFINITIONS, ToolExecutor
+from agent.tools import get_tool_definitions, ToolExecutor
 from agent.reflector import Reflector
 from agent.thinker import Thinker
 from core.logger import get_logger
@@ -35,29 +36,36 @@ logger = get_logger(__name__)
 
 
 class HoshinoAgent:
-    """星野爱 Agent"""
+    """角色 Agent（多角色支持，按 character_id 加载人设/知识库/记忆）"""
 
-    def __init__(self, session_id: str = "default"):
+    def __init__(self, session_id: str = "default",
+                 character_id: str = DEFAULT_CHARACTER_ID):
         self.session_id = session_id
-        # 核心模块（记忆/情绪按 session 隔离，人设/工作记忆天然实例隔离）
-        self.persona = Persona()
-        self.emotion = EmotionEngine(session_id=session_id)
+        self.character_id = character_id
+        # 核心模块（记忆/情绪按 character+session 双维度隔离，人设/工作记忆天然实例隔离）
+        self.persona = Persona(character_id=character_id)
+        self.emotion = EmotionEngine(session_id=session_id, character_id=character_id)
         self.working = WorkingMemory()
-        self.episodic = EpisodicMemory(session_id=session_id)
-        self.semantic = SemanticMemory(session_id=session_id)
+        self.episodic = EpisodicMemory(session_id=session_id, character_id=character_id)
+        self.semantic = SemanticMemory(session_id=session_id, character_id=character_id)
         # 各组件复用同一份记忆实例，确保 clear() 后引用同步（避免双实例导致失效引用）
         self.retriever = HybridRetriever(
-            session_id=session_id, episodic=self.episodic, semantic=self.semantic
+            session_id=session_id, character_id=character_id,
+            episodic=self.episodic, semantic=self.semantic,
         )
         self.consolidator = MemoryConsolidator(
-            session_id=session_id, episodic=self.episodic, semantic=self.semantic
+            session_id=session_id, character_id=character_id,
+            episodic=self.episodic, semantic=self.semantic,
         )
-        self.reflector = Reflector()
-        self.thinker = Thinker()
+        self.reflector = Reflector(character_name=self.persona.name)
+        self.thinker = Thinker(character_name=self.persona.name)
+
+        # 工具定义（按角色定制 search_knowledge 描述）
+        self._tool_definitions = get_tool_definitions(character_id)
 
         # 工具执行器
         self.tool_executor = ToolExecutor(
-            self.emotion, session_id=session_id,
+            self.emotion, session_id=session_id, character_id=character_id,
             episodic=self.episodic, semantic=self.semantic,
         )
 
@@ -126,7 +134,8 @@ class HoshinoAgent:
 
         # 4. 构建系统提示词（注入 Thinker 的思考结果指导 ReAct loop）
         system_prompt = build_system_prompt(
-            persona_ctx, emotion_ctx, retrieval_ctx, working_ctx, semantic_ctx
+            persona_ctx, emotion_ctx, retrieval_ctx, working_ctx, semantic_ctx,
+            character_name=self.persona.name,
         )
         if think_ctx:
             system_prompt = f"{system_prompt}\n\n{think_ctx}"
@@ -147,7 +156,7 @@ class HoshinoAgent:
                 resp = await self._client.chat.completions.create(
                     model=LLM_MODEL,
                     messages=messages,
-                    tools=TOOL_DEFINITIONS,
+                    tools=self._tool_definitions,
                     tool_choice="auto",
                     temperature=LLM_TEMPERATURE,
                     max_tokens=LLM_MAX_TOKENS,
